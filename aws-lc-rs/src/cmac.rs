@@ -101,6 +101,7 @@ use crate::ptr::{ConstPointer, LcPtr};
 use crate::{constant_time, rand};
 use core::mem::MaybeUninit;
 use core::ptr::null_mut;
+use zeroize::Zeroize;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum AlgorithmId {
@@ -192,6 +193,28 @@ impl AsRef<[u8]> for Tag {
     #[inline]
     fn as_ref(&self) -> &[u8] {
         &self.bytes[..self.len]
+    }
+}
+
+/// A CMAC tag that automatically zeroizes its contents when dropped.
+///
+/// For a given tag `t`, use `t.as_ref()` to get the tag value as a byte slice.
+#[derive(Clone, Debug)]
+pub struct SecretTag {
+    bytes: [u8; MAX_CMAC_TAG_LEN],
+    len: usize,
+}
+
+impl AsRef<[u8]> for SecretTag {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+impl Drop for SecretTag {
+    fn drop(&mut self) {
+        self.bytes.zeroize();
     }
 }
 
@@ -406,6 +429,23 @@ pub fn sign(key: &Key, data: &[u8]) -> Result<Tag, Unspecified> {
     let mut ctx = Context::with_key(key);
     ctx.update(data)?;
     ctx.sign()
+}
+
+/// Calculates the CMAC of `data` using the key `key` and returns a zeroizing tag.
+///
+/// The returned tag will automatically zeroize its contents when dropped.
+///
+/// # Errors
+/// `error::Unspecified` if the CMAC calculation fails.
+#[inline]
+pub fn derive(key: &Key, data: &[u8]) -> Result<SecretTag, Unspecified> {
+    let mut tag = sign(key, data)?;
+    let result = SecretTag {
+        bytes: tag.bytes,
+        len: tag.len,
+    };
+    tag.bytes.zeroize();
+    Ok(result)
 }
 
 /// Calculates the CMAC of `data` using the signing key `key`, and verifies
